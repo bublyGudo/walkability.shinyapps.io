@@ -1,0 +1,101 @@
+---
+title: "Walkability"
+author: "Fang Wang"
+date: "2024-11-28"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(plotly)
+library(leaflet)
+library(geosphere) # For distance calculations
+library(leaflet)
+library(sf)
+library(dplyr)
+```
+
+```{r data, include=FALSE}
+stores = read.csv("./data/Recognized_Shop_Healthy_Stores_20241116.csv") |> 
+  janitor::clean_names() |> 
+  mutate(borough = case_when(
+    borough == "New York" ~ "Manhattan",
+    TRUE ~ borough
+  )) |> 
+  rename(year = year_awarded, healthy_store_market = store_name, address = street_address) |> 
+  select (healthy_store_market, borough, year, address, latitude, longitude) |> 
+  distinct(latitude, longitude, .keep_all = TRUE) |> 
+  mutate(type = "healhty store")
+
+farmer_market = read.csv("./data/farmers_market_data.csv") |> 
+  janitor::clean_names() |> 
+  select(farmers_market, borough, year, address, latitude, longitude) |>
+  rename(healthy_store_market = farmers_market) |>      distinct(latitude, longitude, .keep_all = TRUE) |> mutate(type = "farmer market")
+
+## correct the wrong longitude for two farmer-markets: Saratoga Farm Stand (from the same dataset) and Morris Heights Farmstand (search online)
+
+## bind the store and farmer_market together
+stores_farmer_market = rbind(stores, farmer_market)
+
+write.csv(stores_farmer_market, "stores_farmer_market.csv")
+
+subway = read.csv("./data/MTA_Subway_Stations_20241106.csv") |> 
+  janitor::clean_names() |> 
+  select (line, stop_name, gtfs_latitude, gtfs_longitude, borough) |> 
+  mutate(
+    borough = case_when(
+      borough == "Q"~"Queens",
+      borough == "M"~"Manhattan",
+      borough == "Bk"~"Brooklyn",
+      borough == "Bx"~"Bronx",
+      borough == "SI"~"Staten Island",
+      TRUE ~ borough  # Keep the original value if it doesn't match any condition
+    )) |> 
+  rename (latitude = gtfs_latitude,
+          longitude = gtfs_longitude)
+write.csv(subway, "subway.csv")
+```
+
+```{r}
+# Load store locations and subway stations
+stores <- read.csv("stores_farmer_market.csv") |>   # Update the file path if needed
+filter(!is.na(latitude) & !is.na(longitude))
+subways <- read.csv("subway.csv") # Update the file path if needed
+```
+
+```{r}
+# Convert stores and subways data into sf objects
+stores_sf <- st_as_sf(stores, coords = c("longitude", "latitude"), crs = 4326)
+subways_sf <- st_as_sf(subways, coords = c("longitude", "latitude"), crs = 4326)
+```
+
+```{r}
+# Buffer subway stations by 400 meters
+subway_buffers <- st_buffer(subways_sf, dist = 400)  # 400 meters buffer
+```
+
+
+```{r}
+# Find stores within the 400 meters buffer
+stores_within_buffer <- st_intersection(stores_sf, subway_buffers)
+```
+
+```{r}
+# Create the leaflet map
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  # Add subway stations
+  addCircleMarkers(data = subways_sf, color = "red", radius = 5, popup = ~as.character(subways$station_name)) %>%
+  # Add stores within 400m radius
+  addCircleMarkers(data = stores_within_buffer, color = "green", radius = 3, popup = ~stores$healthy_store_market, label = ~stores$healthy_store_market) %>%
+  # Add 400m buffer zones around subway stations
+  addPolygons(data = subway_buffers, fillColor = "yellow", fillOpacity = 0.1, color = "gray", weight = 0.5) %>%
+  # Add legend
+  addLegend(position = "bottomright", 
+            colors = c("red", "green", "yellow"),
+            labels = c("Subway Stations", "Stores", "400 meters"))
+```
+
